@@ -8,12 +8,31 @@ const { Server } = require('socket.io');
 require("dotenv").config();
 
 const PORT = process.env.PORT || 4000;
+
+const allowedOrigins = (process.env.CLIENT_URLS || process.env.CLIENT_URL || "http://localhost:5000")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+const corsOrigin = (origin, callback) => {
+    // Allow non-browser requests and same-origin requests without Origin header.
+    if (!origin) {
+        return callback(null, true);
+    }
+
+    if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+    }
+
+    return callback(new Error("CORS origin not allowed"));
+};
+
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
-        origin: true,
+        origin: corsOrigin,
         credentials: true,
-        methods: ['GET', 'POST'],
+        methods: ['GET', 'POST', 'PUT', 'DELETE'],
     },
 });
 
@@ -35,7 +54,7 @@ const getAllConnectedClients = (roomId) => {
 };
 
 app.use(cors({
-    origin: true,
+    origin: corsOrigin,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization'],
