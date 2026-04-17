@@ -33,6 +33,7 @@ exports.signup = async (req, res) => {
 
 exports.login = async (req, res) => {
     try {
+        const isProduction = process.env.NODE_ENV === "production";
         const { email, password } = req.body;
 
         if (!email || !password) {
@@ -56,8 +57,8 @@ exports.login = async (req, res) => {
             const options = {
                 expires: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
                 httpOnly: true,
-                secure: true,              // ✅ Important: secure for HTTPS (Render)
-                sameSite: "None"   ,
+                secure: isProduction,
+                sameSite: isProduction ? "None" : "Lax",
             };
 
             return res.cookie("token", token, options).status(200).json({
@@ -79,10 +80,11 @@ exports.login = async (req, res) => {
 
 exports.logout = async (req, res) => {
   try {
+        const isProduction = process.env.NODE_ENV === "production";
     res.clearCookie("token", {
       httpOnly: true,
-      secure: true,
-      sameSite: "None",
+            secure: isProduction,
+            sameSite: isProduction ? "None" : "Lax",
     });
     return res.status(200).json({ success: true, message: "Logged out successfully" });
   } catch (error) {

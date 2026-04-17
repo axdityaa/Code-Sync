@@ -31,12 +31,15 @@ const Home = () => {
 
     const [roomId, setRoomId] = useState('');
     const [username, setUsername] = useState('');
+    const [roomName, setRoomName] = useState('');
+    const [isNewRoom, setIsNewRoom] = useState(false);
 
     const createNewRoom = (e) => {
         e.preventDefault();
         const id = uuidV4();
         setRoomId(id);
-        toast.success('Created a new room');
+        setIsNewRoom(true);
+        toast.success('New room ID generated. Enter room name and join.');
     };
 
     const joinRoom = () => {
@@ -45,12 +48,23 @@ const Home = () => {
             return;
         }
 
+        const finalRoomName = roomName.trim();
+
+        if (isNewRoom && !finalRoomName) {
+            toast.error('Room name is required for new room');
+            return;
+        }
+
         // Redirect to editor with room ID and username
         navigate(`/editor/${roomId}`, {
             state: {
                 username,
+                roomName: finalRoomName,
+                joinMode: isNewRoom ? 'create' : 'join',
             },
         });
+
+        setIsNewRoom(false);
     };
 
     const handleInputEnter = (e) => {
@@ -75,6 +89,14 @@ const Home = () => {
                         placeholder="ROOM ID"
                         onChange={(e) => setRoomId(e.target.value)}
                         value={roomId}
+                        onKeyUp={handleInputEnter}
+                    />
+                    <input
+                        type="text"
+                        className="inputBox"
+                        placeholder="ROOM NAME (required for new room)"
+                        onChange={(e) => setRoomName(e.target.value)}
+                        value={roomName}
                         onKeyUp={handleInputEnter}
                     />
                     <input

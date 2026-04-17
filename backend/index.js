@@ -9,10 +9,18 @@ require("dotenv").config();
 
 const PORT = process.env.PORT || 4000;
 
-const allowedOrigins = (process.env.CLIENT_URLS || process.env.CLIENT_URL || "http://localhost:5000")
+const envOrigins = (process.env.CLIENT_URLS || process.env.CLIENT_URL || "")
     .split(",")
     .map((origin) => origin.trim())
     .filter(Boolean);
+
+const allowedOrigins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5000",
+    "http://127.0.0.1:5000",
+    ...envOrigins,
+];
 
 const corsOrigin = (origin, callback) => {
     // Allow non-browser requests and same-origin requests without Origin header.
@@ -42,15 +50,46 @@ const ACTIONS = {
     DISCONNECTED: 'disconnected',
     CODE_CHANGE: 'code-change',
     SYNC_CODE: 'sync-code',
+    ROOM_META: 'room-meta',
+    WRITE_ACCESS_REQUEST: 'write-access-request',
+    WRITE_ACCESS_UPDATE: 'write-access-update',
 };
 
 const userSocketMap = {};
+const roomOwnerMap = {};
+const roomWriteAccessMap = {};
 
 const getAllConnectedClients = (roomId) => {
     return Array.from(io.sockets.adapter.rooms.get(roomId) || []).map((socketId) => ({
         socketId,
         username: userSocketMap[socketId],
+        canWrite: hasWriteAccess(roomId, socketId),
     }));
+};
+
+const hasWriteAccess = (roomId, socketId) => {
+    if (!socketId) {
+        return false;
+    }
+
+    if (roomOwnerMap[roomId] === socketId) {
+        return true;
+    }
+
+    return roomWriteAccessMap[roomId]?.has(socketId) || false;
+};
+
+const emitRoomMeta = (roomId) => {
+    const clients = getAllConnectedClients(roomId);
+    const ownerSocketId = roomOwnerMap[roomId] || null;
+
+    clients.forEach(({ socketId }) => {
+        io.to(socketId).emit(ACTIONS.ROOM_META, {
+            ownerSocketId,
+            clients,
+            canWrite: hasWriteAccess(roomId, socketId),
+        });
+    });
 };
 
 app.use(cors({
@@ -75,9 +114,35 @@ app.use('/api/v1/ai', aiRoutes);
 
 
 io.on('connection', (socket) => {
-    socket.on(ACTIONS.JOIN, ({ roomId, username }) => {
+    socket.on(ACTIONS.JOIN, ({ roomId, username, joinMode }) => {
         userSocketMap[socket.id] = username;
         socket.join(roomId);
+
+        const roomClients = io.sockets.adapter.rooms.get(roomId) || new Set();
+        const isFirstClientInRoom = roomClients.size === 1;
+        const currentOwner = roomOwnerMap[roomId];
+        const ownerStillConnected = currentOwner && roomClients.has(currentOwner);
+        const ownerUsername = currentOwner ? userSocketMap[currentOwner] : null;
+
+        // Deterministic rule: room creator always becomes owner.
+        if (joinMode === 'create') {
+            roomOwnerMap[roomId] = socket.id;
+        } else if (isFirstClientInRoom) {
+            roomOwnerMap[roomId] = socket.id;
+        } else if (!currentOwner || !ownerStillConnected) {
+            // Recover from stale owner state: if owner is missing, promote current joiner.
+            roomOwnerMap[roomId] = socket.id;
+        } else if (ownerUsername && ownerUsername === username && currentOwner !== socket.id) {
+            // Preserve ownership when owner reconnects with a new socket id.
+            roomOwnerMap[roomId] = socket.id;
+        }
+
+        if (!roomWriteAccessMap[roomId]) {
+            roomWriteAccessMap[roomId] = new Set();
+        }
+
+        // Owner always has write access.
+        roomWriteAccessMap[roomId].add(roomOwnerMap[roomId]);
 
         const clients = getAllConnectedClients(roomId);
         clients.forEach(({ socketId }) => {
@@ -85,12 +150,88 @@ io.on('connection', (socket) => {
                 clients,
                 username,
                 socketId: socket.id,
+                ownerSocketId: roomOwnerMap[roomId],
+                canWrite: hasWriteAccess(roomId, socketId),
             });
         });
+
+        emitRoomMeta(roomId);
     });
 
     socket.on(ACTIONS.CODE_CHANGE, ({ roomId, code }) => {
+        if (!hasWriteAccess(roomId, socket.id)) {
+            io.to(socket.id).emit(ACTIONS.WRITE_ACCESS_UPDATE, {
+                canWrite: false,
+                status: 'denied',
+                message: 'You do not have write access for this room.',
+            });
+            return;
+        }
+
         socket.in(roomId).emit(ACTIONS.CODE_CHANGE, { code });
+    });
+
+    socket.on(ACTIONS.WRITE_ACCESS_REQUEST, ({ roomId }) => {
+        const ownerSocketId = roomOwnerMap[roomId];
+
+        if (!ownerSocketId) {
+            return;
+        }
+
+        if (socket.id === ownerSocketId) {
+            io.to(socket.id).emit(ACTIONS.WRITE_ACCESS_UPDATE, {
+                canWrite: true,
+                status: 'accepted',
+                message: 'You are the room owner.',
+            });
+            return;
+        }
+
+        io.to(ownerSocketId).emit(ACTIONS.WRITE_ACCESS_REQUEST, {
+            roomId,
+            requesterSocketId: socket.id,
+            requesterUsername: userSocketMap[socket.id],
+        });
+
+        io.to(socket.id).emit(ACTIONS.WRITE_ACCESS_UPDATE, {
+            canWrite: false,
+            status: 'pending',
+            message: 'Access request sent to room owner.',
+        });
+    });
+
+    socket.on(ACTIONS.WRITE_ACCESS_UPDATE, ({ roomId, requesterSocketId, decision }) => {
+        const ownerSocketId = roomOwnerMap[roomId];
+        if (!ownerSocketId || socket.id !== ownerSocketId || !requesterSocketId) {
+            return;
+        }
+
+        if (!roomWriteAccessMap[roomId]) {
+            roomWriteAccessMap[roomId] = new Set();
+        }
+
+        if (decision === 'accept') {
+            roomWriteAccessMap[roomId].add(requesterSocketId);
+        } else {
+            roomWriteAccessMap[roomId].delete(requesterSocketId);
+        }
+
+        io.to(requesterSocketId).emit(ACTIONS.WRITE_ACCESS_UPDATE, {
+            canWrite: decision === 'accept',
+            status: decision === 'accept' ? 'accepted' : 'rejected',
+            message:
+                decision === 'accept'
+                    ? 'Owner granted you write access.'
+                    : 'Owner rejected your write access request.',
+        });
+
+        io.to(ownerSocketId).emit(ACTIONS.WRITE_ACCESS_UPDATE, {
+            requesterSocketId,
+            status: 'resolved',
+            decision,
+        });
+
+        emitRoomMeta(roomId);
     });
 
     socket.on(ACTIONS.SYNC_CODE, ({ socketId, code }) => {
@@ -104,6 +245,28 @@ io.on('connection', (socket) => {
                 socketId: socket.id,
                 username: userSocketMap[socket.id],
             });
+
+            roomWriteAccessMap[roomId]?.delete(socket.id);
+
+            // Reassign owner to another active client if current owner disconnects.
+            if (roomOwnerMap[roomId] === socket.id) {
+                const remainingClients = Array.from(io.sockets.adapter.rooms.get(roomId) || []).filter(
+                    (id) => id !== socket.id
+                );
+
+                if (remainingClients.length > 0) {
+                    roomOwnerMap[roomId] = remainingClients[0];
+                    if (!roomWriteAccessMap[roomId]) {
+                        roomWriteAccessMap[roomId] = new Set();
+                    }
+                    roomWriteAccessMap[roomId].add(roomOwnerMap[roomId]);
+                } else {
+                    delete roomOwnerMap[roomId];
+                    delete roomWriteAccessMap[roomId];
+                }
+            }
+
+            emitRoomMeta(roomId);
         });
 
         delete userSocketMap[socket.id];
