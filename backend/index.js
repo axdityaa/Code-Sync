@@ -48,6 +48,7 @@ const ACTIONS = {
     JOIN: 'join',
     JOINED: 'joined',
     DISCONNECTED: 'disconnected',
+    ROOM_CLOSED: 'room-closed',
     CODE_CHANGE: 'code-change',
     SYNC_CODE: 'sync-code',
     ROOM_META: 'room-meta',
@@ -58,6 +59,17 @@ const ACTIONS = {
 const userSocketMap = {};
 const roomOwnerMap = {};
 const roomWriteAccessMap = {};
+
+const closeRoom = (roomId, message = 'Owner left. Room closed.') => {
+    io.to(roomId).emit(ACTIONS.ROOM_CLOSED, {
+        roomId,
+        message,
+    });
+
+    io.in(roomId).socketsLeave(roomId);
+    delete roomOwnerMap[roomId];
+    delete roomWriteAccessMap[roomId];
+};
 
 const getAllConnectedClients = (roomId) => {
     return Array.from(io.sockets.adapter.rooms.get(roomId) || []).map((socketId) => ({
@@ -129,12 +141,12 @@ io.on('connection', (socket) => {
             roomOwnerMap[roomId] = socket.id;
         } else if (isFirstClientInRoom) {
             roomOwnerMap[roomId] = socket.id;
-        } else if (!currentOwner || !ownerStillConnected) {
-            // Recover from stale owner state: if owner is missing, promote current joiner.
-            roomOwnerMap[roomId] = socket.id;
         } else if (ownerUsername && ownerUsername === username && currentOwner !== socket.id) {
             // Preserve ownership when owner reconnects with a new socket id.
             roomOwnerMap[roomId] = socket.id;
+        } else if (!currentOwner || !ownerStillConnected) {
+            closeRoom(roomId, 'Owner unavailable. Room closed.');
+            return;
         }
 
         if (!roomWriteAccessMap[roomId]) {
@@ -241,6 +253,17 @@ io.on('connection', (socket) => {
     socket.on('disconnecting', () => {
         const rooms = [...socket.rooms];
         rooms.forEach((roomId) => {
+            if (roomId === socket.id) {
+                return;
+            }
+
+            const isOwnerLeaving = roomOwnerMap[roomId] === socket.id;
+
+            if (isOwnerLeaving) {
+                closeRoom(roomId, 'Owner left. Room closed.');
+                return;
+            }
+
             socket.in(roomId).emit(ACTIONS.DISCONNECTED, {
                 socketId: socket.id,
                 username: userSocketMap[socket.id],
@@ -248,22 +271,9 @@ io.on('connection', (socket) => {
 
             roomWriteAccessMap[roomId]?.delete(socket.id);
 
-            // Reassign owner to another active client if current owner disconnects.
-            if (roomOwnerMap[roomId] === socket.id) {
-                const remainingClients = Array.from(io.sockets.adapter.rooms.get(roomId) || []).filter(
-                    (id) => id !== socket.id
-                );
-
-                if (remainingClients.length > 0) {
-                    roomOwnerMap[roomId] = remainingClients[0];
-                    if (!roomWriteAccessMap[roomId]) {
-                        roomWriteAccessMap[roomId] = new Set();
-                    }
-                    roomWriteAccessMap[roomId].add(roomOwnerMap[roomId]);
-                } else {
-                    delete roomOwnerMap[roomId];
-                    delete roomWriteAccessMap[roomId];
-                }
+            if (roomOwnerMap[roomId] && !io.sockets.sockets.has(roomOwnerMap[roomId])) {
+                closeRoom(roomId, 'Owner unavailable. Room closed.');
+                return;
             }
 
             emitRoomMeta(roomId);

@@ -3,11 +3,11 @@ const express = require('express');
 const router = express.Router();
 require('dotenv').config();
 
-// Correct import for the newer @google/genai package
-const { GoogleGenAI } = require('@google/genai');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-// Initialize with correct structure
-const ai = new GoogleGenAI({ apiKey: process.env.AI_API_KEY });
+const apiKey = process.env.AI_API_KEY || process.env.GEMINI_API_KEY;
+const genAI = apiKey ? new GoogleGenerativeAI(apiKey) : null;
+const model = genAI ? genAI.getGenerativeModel({ model: 'gemini-1.5-flash' }) : null;
 
 router.post('/suggest', async (req, res) => {
   const { prompt } = req.body;
@@ -16,24 +16,32 @@ router.post('/suggest', async (req, res) => {
     return res.status(400).json({ success: false, message: 'Prompt missing' });
   }
 
-  try {
-    // Use the newer API structure with ai.models.generateContent
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        thinkingConfig: {
-          thinkingBudget: 0, // Disables thinking
-        },
-      }
+  if (!model) {
+    return res.status(500).json({
+      success: false,
+      message: 'Missing AI API key on server. Set AI_API_KEY or GEMINI_API_KEY.',
     });
+  }
 
-    const text = response.text;
+  try {
+    const result = await model.generateContent(prompt);
+    const text = result?.response?.text?.() || '';
+
+    if (!text.trim()) {
+      return res.status(502).json({
+        success: false,
+        message: 'AI returned an empty suggestion.',
+      });
+    }
 
     return res.json({ success: true, suggestion: text });
   } catch (err) {
     console.error('Gemini error:', err);
-    return res.status(500).json({ success: false, message: 'Gemini error occurred' });
+    const providerMessage = err?.message || 'Gemini error occurred';
+    return res.status(502).json({
+      success: false,
+      message: providerMessage,
+    });
   }
 });
 

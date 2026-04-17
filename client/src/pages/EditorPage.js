@@ -18,6 +18,7 @@ const ACTIONS = {
   JOIN: 'join',
   JOINED: 'joined',
   DISCONNECTED: 'disconnected',
+  ROOM_CLOSED: 'room-closed',
   CODE_CHANGE: 'code-change',
   SYNC_CODE: 'sync-code',
   ROOM_META: 'room-meta',
@@ -109,6 +110,11 @@ const EditorPage = () => {
       setPendingRequests((prev) => prev.filter((req) => req.requesterSocketId !== socketId));
     });
 
+    socketRef.current.on(ACTIONS.ROOM_CLOSED, ({ message }) => {
+      toast.error(message || 'Room closed by owner.');
+      navigate('/home');
+    });
+
     socketRef.current.on(ACTIONS.CODE_CHANGE, ({ code }) => {
       if (typeof code === 'string') {
         setCode(code);
@@ -168,6 +174,7 @@ const EditorPage = () => {
       socketRef.current.off(ACTIONS.JOINED);
       socketRef.current.off(ACTIONS.ROOM_META);
       socketRef.current.off(ACTIONS.DISCONNECTED);
+      socketRef.current.off(ACTIONS.ROOM_CLOSED);
       socketRef.current.off(ACTIONS.CODE_CHANGE);
       socketRef.current.off(ACTIONS.WRITE_ACCESS_REQUEST);
       socketRef.current.off(ACTIONS.WRITE_ACCESS_UPDATE);
@@ -259,7 +266,8 @@ const EditorPage = () => {
       }
     } catch (error) {
       console.error(error);
-      toast.error('AI error occurred.');
+      const backendMessage = error?.response?.data?.message;
+      toast.error(`AI error: ${backendMessage || 'Request failed.'}`);
     }
   };
 
@@ -359,6 +367,10 @@ const EditorPage = () => {
               autoCloseBrackets: true,
               matchBrackets: true,
               lineWrapping: true,
+              scrollbarStyle: 'native',
+              coverGutterNextToScrollbar: false,
+              scrollPastEnd: false,
+              fixedGutter: true,
               indentUnit: 4,
               tabSize: 4,
               indentWithTabs: false,
