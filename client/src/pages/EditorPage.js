@@ -92,10 +92,13 @@ const EditorPage = () => {
       setOwnerSocketId(ownerSocketId || null);
       setCanWrite(resolveLocalWriteAccess(ownerSocketId, clients, canWrite));
 
-      socketRef.current.emit(ACTIONS.SYNC_CODE, {
-        code: codeRef.current,
-        socketId,
-      });
+      // Only existing participants should sync code to a new joiner.
+      if (socketId !== socketRef.current?.id) {
+        socketRef.current.emit(ACTIONS.SYNC_CODE, {
+          code: codeRef.current,
+          socketId,
+        });
+      }
     });
 
     socketRef.current.on(ACTIONS.ROOM_META, ({ ownerSocketId, clients, canWrite }) => {

@@ -9,6 +9,8 @@ require("dotenv").config();
 
 const PORT = process.env.PORT || 4000;
 
+// envOrigins = ["https://app1.com", "https://app2.com"]
+
 const envOrigins = (process.env.CLIENT_URLS || process.env.CLIENT_URL || "")
     .split(",")
     .map((origin) => origin.trim())
@@ -36,6 +38,7 @@ const corsOrigin = (origin, callback) => {
 };
 
 const server = http.createServer(app);
+// attach Socket.IO to your server
 const io = new Server(server, {
     cors: {
         origin: corsOrigin,
@@ -56,23 +59,29 @@ const ACTIONS = {
     WRITE_ACCESS_UPDATE: 'write-access-update',
 };
 
-const userSocketMap = {};
+
+const userSocketMap = {}; // Used to know who a socket belongs to
 const roomOwnerMap = {};
 const roomWriteAccessMap = {};
+const roomCodeMap = {};
 
 const closeRoom = (roomId, message = 'Owner left. Room closed.') => {
+    // Notify everyone
     io.to(roomId).emit(ACTIONS.ROOM_CLOSED, {
         roomId,
         message,
     });
-
+    // Remove all users from room
     io.in(roomId).socketsLeave(roomId);
     delete roomOwnerMap[roomId];
     delete roomWriteAccessMap[roomId];
+    delete roomCodeMap[roomId];
 };
 
 const getAllConnectedClients = (roomId) => {
     return Array.from(io.sockets.adapter.rooms.get(roomId) || []).map((socketId) => ({
+        // Map each socket to user info
+        // { socketId: "socket1", username: "Ace", canWrite: true }
         socketId,
         username: userSocketMap[socketId],
         canWrite: hasWriteAccess(roomId, socketId),
@@ -91,11 +100,13 @@ const hasWriteAccess = (roomId, socketId) => {
     return roomWriteAccessMap[roomId]?.has(socketId) || false;
 };
 
+// Send latest room info to every user, personalized per user.
 const emitRoomMeta = (roomId) => {
     const clients = getAllConnectedClients(roomId);
     const ownerSocketId = roomOwnerMap[roomId] || null;
 
     clients.forEach(({ socketId }) => {
+        // io.to() is used to target specific users or a room and send them a message.
         io.to(socketId).emit(ACTIONS.ROOM_META, {
             ownerSocketId,
             clients,
@@ -104,6 +115,7 @@ const emitRoomMeta = (roomId) => {
     });
 };
 
+// Uses CORS middleware to control API access
 app.use(cors({
     origin: corsOrigin,
     credentials: true,
@@ -130,6 +142,7 @@ io.on('connection', (socket) => {
         userSocketMap[socket.id] = username;
         socket.join(roomId);
 
+        // Gets all users in room
         const roomClients = io.sockets.adapter.rooms.get(roomId) || new Set();
         const isFirstClientInRoom = roomClients.size === 1;
         const currentOwner = roomOwnerMap[roomId];
@@ -157,6 +170,7 @@ io.on('connection', (socket) => {
         roomWriteAccessMap[roomId].add(roomOwnerMap[roomId]);
 
         const clients = getAllConnectedClients(roomId);
+        // Sends JOINED event to each user individually
         clients.forEach(({ socketId }) => {
             io.to(socketId).emit(ACTIONS.JOINED, {
                 clients,
@@ -166,9 +180,35 @@ io.on('connection', (socket) => {
                 canWrite: hasWriteAccess(roomId, socketId),
             });
         });
-
+        
+        // Sync full room state
         emitRoomMeta(roomId);
+
+        // Send latest code snapshot to the newly connected client.
+        if (typeof roomCodeMap[roomId] === 'string') {
+            io.to(socket.id).emit(ACTIONS.CODE_CHANGE, {
+                code: roomCodeMap[roomId],
+            });
+        }
     });
+
+    // socket.on("disconnect", () => {
+    //     const username = userSocketMap[socket.id];
+    //     delete userSocketMap[socket.id];
+
+    //     // Check if this user was owner
+    //     for (const roomId in roomOwnerMap) {
+    //         if (roomOwnerMap[roomId] === socket.id) {
+    //             closeRoom(roomId, "Owner disconnected");
+    //         }
+    //     }
+    // });
+
+    // socket.on() to list to upcoming events -> like a event listner
+    // io.emit()	everyone
+    // io.to(room)	all in room
+    // socket.in(room)	all in room except sender
+    // socket.emit()	only sender
 
     socket.on(ACTIONS.CODE_CHANGE, ({ roomId, code }) => {
         if (!hasWriteAccess(roomId, socket.id)) {
@@ -178,6 +218,10 @@ io.on('connection', (socket) => {
                 message: 'You do not have write access for this room.',
             });
             return;
+        }
+
+        if (typeof code === 'string') {
+            roomCodeMap[roomId] = code;
         }
 
         socket.in(roomId).emit(ACTIONS.CODE_CHANGE, { code });
@@ -247,6 +291,28 @@ io.on('connection', (socket) => {
     });
 
     socket.on(ACTIONS.SYNC_CODE, ({ socketId, code }) => {
+        if (!socketId || typeof code !== 'string') {
+            return;
+        }
+
+        const targetSocket = io.sockets.sockets.get(socketId);
+        if (!targetSocket) {
+            return;
+        }
+
+        const senderRooms = [...socket.rooms].filter((roomId) => roomId !== socket.id);
+        const targetRooms = new Set([...targetSocket.rooms].filter((roomId) => roomId !== socketId));
+        const sharedRoomId = senderRooms.find((roomId) => targetRooms.has(roomId));
+
+        if (!sharedRoomId) {
+            return;
+        }
+
+        if (!hasWriteAccess(sharedRoomId, socket.id)) {
+            return;
+        }
+
+        roomCodeMap[sharedRoomId] = code;
         io.to(socketId).emit(ACTIONS.CODE_CHANGE, { code });
     });
 
