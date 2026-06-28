@@ -6,8 +6,20 @@ const Signup = () => {
   const [form, setForm] = useState({ name: '', email: '', password: '' });
   const navigate = useNavigate();
 
+  const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
   const handleSignup = async () => {
     try {
+      if (!form.name || !form.email || !form.password) {
+        alert('Please fill all the details');
+        return;
+      }
+
+      if (!isValidEmail(form.email)) {
+        alert('Please enter a valid email address');
+        return;
+      }
+
       const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:4000';
       
       const res = await axios.post(

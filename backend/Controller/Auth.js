@@ -3,9 +3,19 @@ const User = require("../models/User");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
 
+const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
 exports.signup = async (req, res) => {
     try {
         const { name, email, password } = req.body;
+
+        if (!name || !email || !password) {
+            return res.status(400).json({ success: false, message: "Please fill all the details" });
+        }
+
+        if (!isValidEmail(email)) {
+            return res.status(400).json({ success: false, message: "Please enter a valid email address" });
+        }
 
         const existingUser = await User.findOne({ email });
         if (existingUser) {
