@@ -3,11 +3,13 @@ const app = express();
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const http = require('http');
+const path = require('path');
 const { Server } = require('socket.io');
 
 require("dotenv").config();
 
 const PORT = process.env.PORT || 4000;
+const clientBuildPath = path.join(__dirname, '..', 'client', 'build');
 
 // envOrigins = ["https://app1.com", "https://app2.com"]
 
@@ -125,6 +127,7 @@ app.use(cors({
   }));
 app.use(express.json());
 app.use(cookieParser());
+app.use(express.static(clientBuildPath));
 
 require("./config/database").connect()
 
@@ -135,6 +138,14 @@ app.use("/api/v1/auth",user);
 
 const aiRoutes = require('./routes/ai');
 app.use('/api/v1/ai', aiRoutes);
+
+app.use((req, res, next) => {
+    if (req.originalUrl.startsWith('/api/')) {
+        return next();
+    }
+
+    return res.sendFile(path.join(clientBuildPath, 'index.html'));
+});
 
 
 io.on('connection', (socket) => {
@@ -355,9 +366,5 @@ io.on('connection', (socket) => {
 // Activate 
 server.listen(PORT,() => {
     console.log("Server Run at ",PORT);
-})
-
-app.get("/", (req,res) => {
-    res.send("<h1>Auth App</h1>")
 })
 
