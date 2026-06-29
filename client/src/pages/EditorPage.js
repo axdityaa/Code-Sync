@@ -32,6 +32,7 @@ const EditorPage = () => {
   const location = useLocation();
   const { roomId } = useParams();
   const navigate = useNavigate();
+  const searchParams = new URLSearchParams(location.search);
 
   const [clients, setClients] = useState([]);
   const [code, setCode] = useState(codeRef.current);
@@ -42,9 +43,9 @@ const EditorPage = () => {
   const [writeRequestSent, setWriteRequestSent] = useState(false);
   const [pendingRequests, setPendingRequests] = useState([]);
 
-  const username = location.state?.username;
-  const roomLabel = location.state?.roomName || roomId;
-  const joinMode = location.state?.joinMode || 'join';
+  const username = searchParams.get('username') || location.state?.username;
+  const roomLabel = searchParams.get('roomName') || location.state?.roomName || roomId;
+  const joinMode = searchParams.get('joinMode') || location.state?.joinMode || 'join';
 
   const handleErrors = (error) => {
     console.error('Socket error:', error);
@@ -68,7 +69,7 @@ const EditorPage = () => {
   };
 
   useEffect(() => {
-    if (!location.state || !username) {
+    if (!username) {
       navigate('/');
       return;
     }

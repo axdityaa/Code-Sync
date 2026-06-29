@@ -55,8 +55,14 @@ const Home = () => {
             return;
         }
 
-        // Redirect to editor with room ID and username
-        navigate(`/editor/${roomId}`, {
+        const query = new URLSearchParams({
+            username,
+            roomName: finalRoomName,
+            joinMode: isNewRoom ? 'create' : 'join',
+        }).toString();
+
+        // Redirect to editor with room metadata in the URL so refresh keeps it.
+        navigate(`/editor/${roomId}?${query}`, {
             state: {
                 username,
                 roomName: finalRoomName,
